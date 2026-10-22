@@ -1,0 +1,37 @@
+[project]
+name = "live-drawing-plotter"
+version = "0.1.0"
+description = "Draws what a webcam sees, continuously, with an AxiDraw pen plotter."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+]
+
+[project.optional-dependencies]
+# The official AxiDraw Python API is not on PyPI; it is distributed as a zip.
+axidraw = [
+    "axicli @ https://cdn.evilmadscientist.com/dl/ad/public/AxiDraw_API.zip",
+]
+
+[project.scripts]
+live-plotter = "live_plotter.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["live_plotter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

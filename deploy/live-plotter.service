@@ -1,0 +1,25 @@
+# systemd unit: start the piece at boot and keep it running.
+# Install: see README (deploy/install-pi.sh does it for you).
+[Unit]
+Description=Live drawing plotter (webcam -> AxiDraw)
+After=multi-user.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/live-drawing-plotter
+ExecStart=/home/%i/live-drawing-plotter/.venv/bin/live-plotter --no-preview
+# If the camera or the AxiDraw is not ready yet (or gets unplugged), exit 1 and try again.
+# A clean exit (saturation policy "stop", q in the preview) is not restarted.
+Restart=on-failure
+RestartSec=5
+# Exit 75 = the AxiDraw stopped mid-run (pause button, USB loss) and its position is
+# unknown. Restarting would draw offset; a human must re-home the carriage first.
+RestartPreventExitStatus=75
+Environment=PYTHONUNBUFFERED=1
+# Ctrl+C semantics: lift the pen, go home, disconnect.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
