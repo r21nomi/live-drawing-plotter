@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Live plotter dashboard
+Comment=Full-screen dashboard of the live drawing plotter
+Exec=/home/%USER%/live-drawing-plotter/deploy/kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true

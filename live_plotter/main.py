@@ -13,12 +13,15 @@ import numpy as np
 
 from .camera import CameraError, FrameSource, open_source
 from .config import AppConfig, DrawingConfig, PaperConfig
+from .controls import Phase, RunControl
+from .dashboard import Dashboard
 from .geometry import Point, polyline_length
 from .ink_canvas import InkCanvas
 from .path_planning import order_strokes, select_strokes
 from .persistence import SavedState, StateStore
 from .plotter import AxiDrawPlotter, DryRunPlotter, Plotter, PlotterError, PlotterStopped
 from .preview import NullPreview, Preview, display_available, open_preview
+from .status import StatusInfo
 from .vectorize import detect_edges, vectorize_edges
 
 log = logging.getLogger("live_plotter")
@@ -34,6 +37,7 @@ EXIT_RETRY = 1  # camera / plotter not available: systemd restarts us
 EXIT_NEEDS_HOMING = 75  # AxiDraw stopped mid-run: position unknown, do NOT restart automatically
 
 _NO_FRAME_SLEEP_S = 0.2
+_PAUSE_POLL_S = 0.2
 _CYCLE_FAILURE_SLEEP_S = 1.0
 _MAX_CONSECUTIVE_CYCLE_FAILURES = 10
 
@@ -57,12 +61,14 @@ def main(argv: list[str] | None = None) -> int:
     return run(cfg)
 
 
-def run(cfg: AppConfig, plotter: Plotter | None = None) -> int:
+def run(cfg: AppConfig, plotter: Plotter | None = None, control: RunControl | None = None) -> int:
     """Run until stopped. Returns a process exit code (see EXIT_* constants)."""
     stop = threading.Event()
     _install_signal_handlers(stop)
     if plotter is None:
         plotter = DryRunPlotter(cfg.axidraw, cfg.paper) if cfg.dry_run else AxiDrawPlotter(cfg.axidraw, cfg.paper)
+    control = control or RunControl()
+    dashboard = Dashboard(control, port=cfg.web_port) if cfg.web_port else None
     preview = open_preview(display_available(cfg.preview))
     store = StateStore(cfg.state_dir) if cfg.state_dir else None
     state = _initial_state(cfg, store)
@@ -72,9 +78,11 @@ def run(cfg: AppConfig, plotter: Plotter | None = None) -> int:
     try:
         # Camera first: if it is not ready yet we exit without ever energising the plotter.
         with open_source(cfg.camera) as camera:
+            if dashboard is not None:
+                dashboard.start(camera)
             plotter.connect()
             try:
-                state = _run_loop(camera, plotter, preview, cfg, stop, state, store)
+                state = _run_loop(camera, plotter, preview, cfg, stop, state, store, control, dashboard)
             finally:
                 plotter.finish()
     except PlotterStopped as error:
@@ -85,6 +93,8 @@ def run(cfg: AppConfig, plotter: Plotter | None = None) -> int:
         log.error("%s", error)
         exit_code = EXIT_RETRY
     finally:
+        if dashboard is not None:
+            dashboard.stop()
         preview.close()
         log.info("stopped after %d cycles, %.1f m drawn (exit %d)", state.cycle, state.drawn_mm / 1000, exit_code)
     return exit_code
@@ -124,19 +134,29 @@ def _run_loop(
     stop: threading.Event,
     state: LoopState,
     store: StateStore | None = None,
+    control: RunControl | None = None,
+    dashboard: Dashboard | None = None,
 ) -> LoopState:
+    control = control or RunControl()
     last_frame_at = time.monotonic()
     failures = 0
     while not stop.is_set():
+        if control.take_new_paper_request():
+            state = _new_paper(cfg, state, store, dashboard)
+        if control.paused:
+            control.set_phase(Phase.PAUSED)
+            stop.wait(_PAUSE_POLL_S)
+            continue
         frame = camera.read()
         if frame is None:
+            control.set_phase(Phase.WAITING_CAMERA)
             if time.monotonic() - last_frame_at > cfg.camera.timeout_s:
                 raise CameraError(f"no camera frame for {cfg.camera.timeout_s:.0f} s")
             stop.wait(_NO_FRAME_SLEEP_S)
             continue
         last_frame_at = time.monotonic()
         try:
-            state = run_cycle(frame, state, cfg, plotter, preview, stop, store)
+            state = run_cycle(frame, state, cfg, plotter, preview, stop, store, control, dashboard)
             failures = 0
         except PlotterError:
             raise
@@ -149,6 +169,15 @@ def _run_loop(
     return state
 
 
+def _new_paper(cfg: AppConfig, state: LoopState, store: StateStore | None, dashboard: Dashboard | None) -> LoopState:
+    log.info("new paper: ink memory cleared after %.1f m; waiting for the operator to resume", state.drawn_mm / 1000)
+    fresh = LoopState(InkCanvas.empty(cfg.paper, cfg.drawing.ink_px_per_mm), (0.0, 0.0), 0, 0.0, False)
+    _persist(store, fresh)
+    if dashboard is not None:
+        dashboard.update(np.zeros((1, 1), dtype=np.uint8), fresh.canvas, _status(cfg, fresh, 0, 0))
+    return fresh
+
+
 def run_cycle(
     frame: np.ndarray,
     state: LoopState,
@@ -157,7 +186,10 @@ def run_cycle(
     preview: Preview | NullPreview,
     stop: threading.Event,
     store: StateStore | None = None,
+    control: RunControl | None = None,
+    dashboard: Dashboard | None = None,
 ) -> LoopState:
+    control = control or RunControl()
     edges = detect_edges(frame, cfg.vectorize)
     candidates = vectorize_edges(edges, cfg.vectorize, cfg.paper, cfg.camera.mirror)
     selected = select_strokes(
@@ -168,21 +200,23 @@ def run_cycle(
              state.cycle, len(candidates), len(ordered), state.canvas.coverage() * 100)
 
     canvas, pen, drawn = state.canvas, state.pen, state.drawn_mm
+    control.set_phase(Phase.DRAWING if ordered else Phase.IDLE)
     for stroke in ordered:
-        if stop.is_set():
-            break
+        if stop.is_set() or control.paused:
+            break  # the pen is up between strokes; remaining strokes are re-planned on resume
         plotter.draw_stroke(stroke)
         canvas = canvas.with_strokes([stroke], cfg.drawing.ink_radius_mm)
         pen = stroke[-1]
         drawn += polyline_length(stroke)
-        _persist(store, LoopState(canvas, pen, state.cycle, drawn, state.saturated))  # survive a crash mid-cycle
-        status = _status(cfg, state.cycle, len(candidates), len(ordered), canvas, drawn)
-        if _safe_show(preview, frame, edges, canvas, status):
+        progress = LoopState(canvas, pen, state.cycle, drawn, state.saturated)
+        _persist(store, progress)  # survive a crash mid-cycle
+        if _publish(preview, dashboard, frame, edges, canvas, _status(cfg, progress, len(candidates), len(ordered))):
             log.info("quit requested from preview window")
             stop.set()
 
     if not ordered:
-        if _safe_show(preview, frame, edges, canvas, _status(cfg, state.cycle, len(candidates), 0, canvas, drawn)):
+        idle = LoopState(canvas, pen, state.cycle, drawn, state.saturated)
+        if _publish(preview, dashboard, frame, edges, canvas, _status(cfg, idle, len(candidates), 0)):
             stop.set()
         stop.wait(cfg.drawing.idle_sleep_s)
 
@@ -193,15 +227,26 @@ def run_cycle(
     return next_state
 
 
-def _safe_show(
-    preview: Preview | NullPreview, frame: np.ndarray, edges: np.ndarray, canvas: InkCanvas, status: list[str]
+def _publish(
+    preview: Preview | NullPreview,
+    dashboard: Dashboard | None,
+    frame: np.ndarray,
+    edges: np.ndarray,
+    canvas: InkCanvas,
+    status: StatusInfo,
 ) -> bool:
-    """The preview is cosmetic: a failure there must never lose track of drawn strokes."""
+    """Preview and dashboard are cosmetic: a failure there must never lose track of drawn strokes."""
+    quit_requested = False
     try:
-        return preview.show(frame, edges, canvas, status)
+        quit_requested = preview.show(frame, edges, canvas, status)
     except Exception as error:  # noqa: BLE001
         log.warning("preview failed: %s", error)
-        return False
+    if dashboard is not None:
+        try:
+            dashboard.update(edges, canvas, status)
+        except Exception as error:  # noqa: BLE001
+            log.warning("dashboard update failed: %s", error)
+    return quit_requested
 
 
 def _apply_saturation_policy(state: LoopState, cfg: DrawingConfig, stop: threading.Event) -> LoopState:
@@ -220,12 +265,9 @@ def _apply_saturation_policy(state: LoopState, cfg: DrawingConfig, stop: threadi
     return replace(state, saturated=True)
 
 
-def _status(cfg: AppConfig, cycle: int, candidates: int, strokes: int, canvas: InkCanvas, drawn_mm: float) -> list[str]:
-    mode = "DRY RUN" if cfg.dry_run else "AxiDraw"
-    return [
-        f"{mode}  cycle {cycle}  candidates {candidates}  drawing {strokes}",
-        f"coverage {canvas.coverage() * 100:.1f}%  drawn {drawn_mm / 1000:.2f} m  [q] quit",
-    ]
+def _status(cfg: AppConfig, state: LoopState, candidates: int, strokes: int) -> StatusInfo:
+    return StatusInfo(cycle=state.cycle, candidates=candidates, strokes=strokes, coverage=state.canvas.coverage(),
+                      drawn_mm=state.drawn_mm, dry_run=cfg.dry_run, saturated=state.saturated)
 
 
 def _install_signal_handlers(stop: threading.Event) -> None:
@@ -247,6 +289,9 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
                         help="directory where the ink memory is saved so a restart continues on the same paper")
     parser.add_argument("--no-persist", action="store_true", help="do not save the ink memory")
     parser.add_argument("--fresh", action="store_true", help="discard the saved ink memory (new sheet of paper)")
+    parser.add_argument("--web-port", type=int, default=defaults.web_port,
+                        help="port of the dashboard (camera view and pause/resume controls)")
+    parser.add_argument("--no-web", action="store_true", help="do not serve the dashboard")
     preview = parser.add_mutually_exclusive_group()
     preview.add_argument("--preview", dest="preview", action="store_true", default=None)
     preview.add_argument("--no-preview", dest="preview", action="store_false")
@@ -311,6 +356,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         preview=args.preview,
         state_dir=None if args.no_persist else args.state_dir,
         fresh_start=args.fresh,
+        web_port=None if args.no_web else args.web_port,
     )
 
 
@@ -330,6 +376,7 @@ def _validate(parser: argparse.ArgumentParser, args: argparse.Namespace, width_m
         (1 <= args.speed <= 100, "--speed must be within 1..100"),
         (0 <= args.pen_down < args.pen_up <= 100, "--pen-down must be below --pen-up, both within 0..100"),
         (args.dry_run_speed > 0, "--dry-run-speed must be positive"),
+        (1 <= args.web_port <= 65535, "--web-port must be within 1..65535"),
     ]
     for ok, message in checks:
         if not ok:

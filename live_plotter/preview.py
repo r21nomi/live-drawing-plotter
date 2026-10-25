@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .ink_canvas import InkCanvas
+from .status import StatusInfo
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def open_preview(enabled: bool) -> Preview | NullPreview:
 
 
 class NullPreview:
-    def show(self, frame: np.ndarray, edges: np.ndarray, canvas: InkCanvas, status: list[str]) -> bool:
+    def show(self, frame: np.ndarray, edges: np.ndarray, canvas: InkCanvas, status: StatusInfo) -> bool:
         return False
 
     def close(self) -> None:
@@ -53,8 +54,8 @@ class Preview:
     def __init__(self) -> None:
         cv2.namedWindow(_WINDOW, cv2.WINDOW_AUTOSIZE)
 
-    def show(self, frame: np.ndarray, edges: np.ndarray, canvas: InkCanvas, status: list[str]) -> bool:
-        cv2.imshow(_WINDOW, compose(frame, edges, canvas, status))
+    def show(self, frame: np.ndarray, edges: np.ndarray, canvas: InkCanvas, status: StatusInfo) -> bool:
+        cv2.imshow(_WINDOW, compose(frame, edges, canvas, status.lines()))
         return cv2.waitKey(1) & 0xFF in _QUIT_KEYS
 
     def close(self) -> None:

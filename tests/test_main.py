@@ -133,7 +133,8 @@ def _cfg(tmp_path, **drawing):
     from live_plotter.config import CameraConfig
 
     # state_dir=None: tests must never touch the project's real ./state directory.
-    return AppConfig(dry_run=True, preview=False, state_dir=None, camera=CameraConfig(source=_scene_file(tmp_path)),
+    return AppConfig(dry_run=True, preview=False, state_dir=None, web_port=None,
+                     camera=CameraConfig(source=_scene_file(tmp_path)),
                      drawing=DrawingConfig(length_budget_mm=10_000.0, idle_sleep_s=0.0, **drawing))
 
 
@@ -154,7 +155,8 @@ def test_run_exits_1_when_the_camera_is_unavailable():
     from live_plotter.config import CameraConfig
     from live_plotter.main import EXIT_RETRY, run
 
-    cfg = AppConfig(dry_run=True, preview=False, state_dir=None, camera=CameraConfig(source="/nonexistent/scene.png"))
+    cfg = AppConfig(dry_run=True, preview=False, state_dir=None, web_port=None,
+                    camera=CameraConfig(source="/nonexistent/scene.png"))
     plotter = RecordingPlotter()
     assert run(cfg, plotter=plotter) == EXIT_RETRY
     assert plotter.strokes == []  # the plotter was never energised
@@ -233,3 +235,55 @@ def test_parse_args_state_options():
     assert parse_args(["--state-dir", "/tmp/x"]).state_dir == "/tmp/x"
     assert parse_args(["--no-persist"]).state_dir is None
     assert parse_args(["--fresh"]).fresh_start is True
+
+
+def test_run_loop_pauses_between_strokes_and_resumes(tmp_path):
+    import threading
+
+    from live_plotter.camera import StillImageSource
+    from live_plotter.controls import Phase, RunControl
+    from live_plotter.main import _run_loop
+
+    cfg = _cfg(tmp_path)
+    control = RunControl()
+    control.request_pause()
+    plotter = RecordingPlotter()
+    stop = threading.Event()
+    with StillImageSource(cfg.camera.source) as camera:
+        threading.Timer(0.3, control.request_resume).start()
+        threading.Timer(1.2, stop.set).start()
+        state = _run_loop(camera, plotter, NullPreview(), cfg, stop, _state(cfg), None, control)
+    assert plotter.strokes  # drew after resume
+    assert state.cycle >= 1
+    assert control.phase in (Phase.IDLE, Phase.DRAWING)
+
+
+def test_run_loop_new_paper_clears_canvas_and_saved_state(tmp_path):
+    import threading
+
+    from live_plotter.camera import StillImageSource
+    from live_plotter.controls import RunControl
+    from live_plotter.main import _run_loop
+    from live_plotter.persistence import StateStore
+
+    cfg = _cfg(tmp_path)
+    store = StateStore(tmp_path / "state")
+    inked = _state(cfg)
+    inked = LoopState(inked.canvas.with_strokes([((20.0, 20.0), (200.0, 20.0))], 1.0), (0.0, 0.0), 5, 180.0, False)
+    control = RunControl()
+    control.request_new_paper()
+    stop = threading.Event()
+    with StillImageSource(cfg.camera.source) as camera:
+        threading.Timer(0.3, stop.set).start()
+        state = _run_loop(camera, RecordingPlotter(), NullPreview(), cfg, stop, inked, store, control)
+    assert state.canvas.coverage() == 0.0
+    assert state.drawn_mm == 0.0
+    assert control.paused is True  # waits for the operator to put the paper in and resume
+    saved = store.load(cfg.paper, cfg.drawing.ink_px_per_mm)
+    assert saved is not None and saved.canvas.coverage() == 0.0
+
+
+def test_parse_args_web_options():
+    assert parse_args([]).web_port == 8080
+    assert parse_args(["--web-port", "9000"]).web_port == 9000
+    assert parse_args(["--no-web"]).web_port is None

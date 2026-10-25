@@ -21,4 +21,4 @@ def test_display_override_wins():
 
 
 def test_null_preview_never_quits():
-    assert NullPreview().show(None, None, None, []) is False
+    assert NullPreview().show(None, None, None, None) is False
