@@ -1,10 +1,17 @@
 from live_plotter.controls import Phase, RunControl
 
 
-def test_starts_running():
+def test_starts_running_by_default():
     control = RunControl()
     assert control.paused is False
     assert control.phase == Phase.STARTING
+
+
+def test_can_start_paused_waiting_for_the_start_button():
+    control = RunControl(paused=True)
+    assert control.paused is True
+    control.request_resume()
+    assert control.paused is False
 
 
 def test_pause_and_resume():

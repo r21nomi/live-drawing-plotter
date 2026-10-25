@@ -16,12 +16,13 @@ class Phase(str, Enum):
     DRAWING = "drawing"
     IDLE = "idle"  # nothing new to draw
     PAUSED = "paused"
+    READY = "ready"  # waiting for the start button; nothing drawn on this sheet yet
 
 
 class RunControl:
-    def __init__(self) -> None:
+    def __init__(self, paused: bool = False) -> None:
         self._lock = threading.Lock()
-        self._paused = False
+        self._paused = paused
         self._new_paper = False
         self._phase = Phase.STARTING
 

@@ -133,7 +133,7 @@ def _cfg(tmp_path, **drawing):
     from live_plotter.config import CameraConfig
 
     # state_dir=None: tests must never touch the project's real ./state directory.
-    return AppConfig(dry_run=True, preview=False, state_dir=None, web_port=None,
+    return AppConfig(dry_run=True, preview=False, state_dir=None, web_port=None, autostart=True,
                      camera=CameraConfig(source=_scene_file(tmp_path)),
                      drawing=DrawingConfig(length_budget_mm=10_000.0, idle_sleep_s=0.0, **drawing))
 
@@ -287,3 +287,38 @@ def test_parse_args_web_options():
     assert parse_args([]).web_port == 8080
     assert parse_args(["--web-port", "9000"]).web_port == 9000
     assert parse_args(["--no-web"]).web_port is None
+
+
+def test_run_waits_for_the_start_button_by_default(tmp_path):
+    import threading
+    from dataclasses import replace
+
+    from live_plotter.controls import Phase, RunControl
+    from live_plotter.main import EXIT_OK, run
+
+    cfg = replace(_cfg(tmp_path), autostart=False)
+    control = RunControl(paused=True)
+    plotter = RecordingPlotter()
+    seen_phase = []
+
+    def observe_then_start():
+        seen_phase.append(control.phase)
+        control.request_resume()
+
+    threading.Timer(0.5, observe_then_start).start()
+    threading.Timer(1.5, _stop_via_signal).start()
+    assert run(cfg, plotter=plotter, control=control) == EXIT_OK
+    assert seen_phase == [Phase.READY]
+    assert plotter.strokes  # drew only after the start button
+
+
+def _stop_via_signal():
+    import os
+    import signal
+
+    os.kill(os.getpid(), signal.SIGINT)
+
+
+def test_parse_args_autostart():
+    assert parse_args([]).autostart is False
+    assert parse_args(["--autostart"]).autostart is True

@@ -40,15 +40,16 @@ uv sync --all-extras
 AxiDraw なしで動かすには `--dry-run` を付けます。ペンの移動時間をスリープで模倣し、プレビュー窓に「紙の上の描画結果」を再現します。
 
 ```bash
-uv run live-plotter --dry-run
+uv run live-plotter --dry-run --autostart
 ```
 
+`--autostart` を付けないと、ダッシュボード（`http://localhost:8080/`）の「開始」を押すまで描き始めません。
 カメラの権限を求められたら許可してください（ターミナルアプリにカメラ権限が必要です）。
 
 カメラなしでも試せます。画像ファイルは静止風景として、動画ファイルはループ再生されます。オプション調整に便利です。
 
 ```bash
-uv run live-plotter --dry-run --source path/to/scene.png
+uv run live-plotter --dry-run --autostart --source path/to/scene.png
 ```
 
 Mac から実機の AxiDraw を動かすこともできます。`--dry-run` を外すだけです。
