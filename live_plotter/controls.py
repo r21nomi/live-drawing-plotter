@@ -7,16 +7,31 @@ The main loop polls it between strokes; the dashboard sets it from HTTP requests
 from __future__ import annotations
 
 import threading
+from dataclasses import asdict, dataclass
 from enum import Enum
 
 
 class Phase(str, Enum):
     STARTING = "starting"
     WAITING_CAMERA = "waiting_camera"
+    WAITING_PLOTTER = "waiting_plotter"
     DRAWING = "drawing"
     IDLE = "idle"  # nothing new to draw
     PAUSED = "paused"
     READY = "ready"  # waiting for the start button; nothing drawn on this sheet yet
+
+
+class ProblemKind(str, Enum):
+    CAMERA = "camera"  # cannot open / lost the camera; retrying
+    PLOTTER = "plotter"  # cannot connect to the AxiDraw; retrying
+    PLOTTER_STOPPED = "plotter_stopped"  # pause button / USB loss: re-home by hand, then press start
+    CYCLES = "cycles"  # image processing keeps failing
+
+
+@dataclass(frozen=True)
+class Problem:
+    kind: ProblemKind
+    detail: str
 
 
 class RunControl:
@@ -25,6 +40,7 @@ class RunControl:
         self._paused = paused
         self._new_paper = False
         self._phase = Phase.STARTING
+        self._problem: Problem | None = None
 
     @property
     def paused(self) -> bool:
@@ -60,6 +76,20 @@ class RunControl:
         with self._lock:
             self._phase = phase
 
+    @property
+    def problem(self) -> Problem | None:
+        with self._lock:
+            return self._problem
+
+    def set_problem(self, kind: ProblemKind, detail: str) -> None:
+        with self._lock:
+            self._problem = Problem(kind, detail)
+
+    def clear_problem(self) -> None:
+        with self._lock:
+            self._problem = None
+
     def snapshot(self) -> dict[str, object]:
         with self._lock:
-            return {"phase": self._phase.value, "paused": self._paused}
+            problem = None if self._problem is None else {**asdict(self._problem), "kind": self._problem.kind.value}
+            return {"phase": self._phase.value, "paused": self._paused, "problem": problem}

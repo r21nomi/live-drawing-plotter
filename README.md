@@ -53,7 +53,10 @@ sudo systemctl stop live-plotter@$USER.service
 
 ### 困ったとき
 
-- ペンが動かない: ログを見る。`journalctl -u live-plotter@$USER.service -n 50`
-- AxiDraw 本体の一時停止ボタンを押した、または途中で止まった: キャリッジを手で左上の角に戻してから `sudo systemctl start live-plotter@$USER.service`
-- ダッシュボードが「本体と通信できません」と出る: 本体が止まっています。ログを見てください。
+ダッシュボードの状態行に赤字で原因が出ます。本体は自動で再試行し続けるので、原因を取り除けばそのまま復帰します。
+
+- 「カメラが見つかりません」: USB カメラを挿し直す（青い USB 3.0 ポート推奨）。
+- 「AxiDraw に接続できません」: AxiDraw の電源と USB を確認する。
+- 「AxiDraw が停止しました」: 本体の一時停止ボタンか USB 切断です。キャリッジを手で左上の角に戻してから「開始」を押す。
+- 「本体と通信できません」: 本体プロセスが止まっています。`journalctl -u live-plotter@$USER.service -n 50` でログを見る。
 - それ以外は [運用ガイド](docs/operations.md) のトラブルシューティングへ。

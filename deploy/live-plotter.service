@@ -9,13 +9,11 @@ Type=simple
 User=%i
 WorkingDirectory=/home/%i/live-drawing-plotter
 ExecStart=/home/%i/live-drawing-plotter/.venv/bin/live-plotter --no-preview
-# If the camera or the AxiDraw is not ready yet (or gets unplugged), exit 1 and try again.
+# Camera / AxiDraw problems are handled inside the process (it waits and retries while the
+# dashboard shows what is wrong), so a restart is only needed after an unexpected crash.
 # A clean exit (saturation policy "stop", q in the preview) is not restarted.
 Restart=on-failure
 RestartSec=5
-# Exit 75 = the AxiDraw stopped mid-run (pause button, USB loss) and its position is
-# unknown. Restarting would draw offset; a human must re-home the carriage first.
-RestartPreventExitStatus=75
 Environment=PYTHONUNBUFFERED=1
 # Ctrl+C semantics: lift the pen, go home, disconnect.
 KillSignal=SIGINT

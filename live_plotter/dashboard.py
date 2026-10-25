@@ -53,6 +53,12 @@ def _blank_jpeg() -> bytes:
     return _encode_jpeg(np.full((*_BLANK_JPEG_SIZE, 3), 28, dtype=np.uint8))
 
 
+def _no_camera_jpeg() -> bytes:
+    image = np.full((240, 320, 3), 28, dtype=np.uint8)
+    cv2.putText(image, "NO CAMERA", (70, 128), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (90, 90, 200), 2, cv2.LINE_AA)
+    return _encode_jpeg(image)
+
+
 class Dashboard:
     def __init__(self, control: RunControl, port: int = 8080, host: str = "0.0.0.0") -> None:
         self._control = control
@@ -61,11 +67,12 @@ class Dashboard:
         self._lock = threading.Lock()
         blank = _blank_jpeg()
         self._snapshot = _Snapshot(blank, blank, StatusInfo(), 0)
-        self._camera_jpeg: bytes = blank
+        self._camera_jpeg: bytes = _no_camera_jpeg()
         self._camera_seq = 0
         self._stop = threading.Event()
         self._server: ThreadingHTTPServer | None = None
         self._threads: list[threading.Thread] = []
+        self._camera: FrameSource | None = None
 
     @property
     def port(self) -> int:
@@ -76,13 +83,15 @@ class Dashboard:
         with self._lock:
             return self._camera_seq
 
-    def start(self, camera: FrameSource) -> None:
+    def start(self, camera: FrameSource | None = None) -> None:
+        """Serve immediately; the camera can be attached later with set_camera()."""
+        self._camera = camera
         handler = _make_handler(self)
         self._server = ThreadingHTTPServer((self._host, self._requested_port), handler)
         self._server.daemon_threads = True
         self._threads = [
             threading.Thread(target=self._server.serve_forever, name="dashboard-http", daemon=True),
-            threading.Thread(target=self._camera_loop, args=(camera,), name="dashboard-camera", daemon=True),
+            threading.Thread(target=self._camera_loop, name="dashboard-camera", daemon=True),
         ]
         for thread in self._threads:
             thread.start()
@@ -95,6 +104,14 @@ class Dashboard:
             self._server.server_close()
         for thread in self._threads:
             thread.join(timeout=2.0)
+
+    def set_camera(self, camera: FrameSource | None) -> None:
+        """Attach (or detach, with None) the frame source behind the live stream."""
+        with self._lock:
+            self._camera = camera
+            if camera is None:
+                self._camera_jpeg = _no_camera_jpeg()
+                self._camera_seq += 1
 
     def update(self, edges: np.ndarray, canvas: InkCanvas, status: StatusInfo) -> None:
         edges_jpeg = _encode_jpeg(edges)
@@ -131,12 +148,14 @@ class Dashboard:
     def stopped(self) -> bool:
         return self._stop.is_set()
 
-    def _camera_loop(self, camera: FrameSource) -> None:
+    def _camera_loop(self) -> None:
         interval = 1.0 / _CAMERA_FPS
         while not self._stop.is_set():
             started = time.monotonic()
+            with self._lock:
+                camera = self._camera
             try:
-                frame = camera.read()
+                frame = None if camera is None else camera.read()
                 if frame is not None:
                     jpeg = _encode_jpeg(frame)
                     with self._lock:

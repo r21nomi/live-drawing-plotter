@@ -35,4 +35,14 @@ def test_phase_is_tracked():
     control = RunControl()
     control.set_phase(Phase.DRAWING)
     assert control.phase == Phase.DRAWING
-    assert control.snapshot() == {"phase": "drawing", "paused": False}
+    assert control.snapshot() == {"phase": "drawing", "paused": False, "problem": None}
+
+
+def test_problem_is_reported_and_cleared():
+    from live_plotter.controls import ProblemKind
+
+    control = RunControl()
+    control.set_problem(ProblemKind.CAMERA, "camera 0 could not be opened")
+    assert control.snapshot()["problem"] == {"kind": "camera", "detail": "camera 0 could not be opened"}
+    control.clear_problem()
+    assert control.problem is None
