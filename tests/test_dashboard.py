@@ -126,3 +126,26 @@ def test_unknown_path_is_404(dashboard):
     with pytest.raises(urllib.error.HTTPError) as error:
         _get(board, "/nope")
     assert error.value.code == 404
+
+
+def test_dashboard_runs_without_a_camera_and_accepts_one_later(scene):
+    control = RunControl()
+    board = Dashboard(control, port=0)
+    board.start()
+    try:
+        status, content_type, body = _get(board, "/status.json")
+        assert status == 200
+        assert json.loads(body)["problem"] is None
+        request = urllib.request.urlopen(f"http://127.0.0.1:{board.port}/camera.mjpg", timeout=5)
+        assert b"--frame" in request.read(64)  # placeholder frame while no camera is attached
+        request.close()
+        with StillImageSource(str(scene)) as camera:
+            board.set_camera(camera)
+            deadline = time.time() + 5
+            before = board.camera_frames
+            while time.time() < deadline and board.camera_frames <= before:
+                time.sleep(0.05)
+            assert board.camera_frames > before
+            board.set_camera(None)
+    finally:
+        board.stop()

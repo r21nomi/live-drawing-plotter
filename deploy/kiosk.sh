@@ -5,9 +5,9 @@ set -u
 
 URL="${LIVE_PLOTTER_URL:-http://localhost:8080/}"
 
-# Wait until the piece is serving its dashboard (it may still be connecting to the camera).
-for _ in $(seq 1 120); do
-  if curl -fs -o /dev/null "$URL"; then break; fi
+# Wait until the piece is serving its dashboard, however long it takes: Chromium shows a
+# dead "connection refused" page if started too early, and never reloads it by itself.
+until curl -fs -o /dev/null "$URL"; do
   sleep 1
 done
 
@@ -20,4 +20,5 @@ exec "$BROWSER" \
   --kiosk "$URL" \
   --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
   --disable-features=TranslateUI --check-for-update-interval=31536000 \
-  --incognito --no-first-run --start-fullscreen --hide-scrollbars
+  --incognito --no-first-run --start-fullscreen --hide-scrollbars \
+  --password-store=basic

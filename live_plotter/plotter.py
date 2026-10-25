@@ -29,6 +29,9 @@ class PlotterStopped(PlotterError):
 
 
 class Plotter(Protocol):
+    @property
+    def connected(self) -> bool: ...
+
     def connect(self) -> None: ...
 
     def draw_stroke(self, stroke: Polyline) -> None: ...
@@ -66,6 +69,10 @@ class AxiDrawPlotter:
         self._paper = paper
         self._factory = factory
         self._ad: Any = None
+
+    @property
+    def connected(self) -> bool:
+        return self._ad is not None
 
     def connect(self) -> None:
         ad = self._factory()
@@ -130,8 +137,14 @@ class DryRunPlotter:
         self._speed = cfg.dry_run_speed_mm_s
         self._paper = paper
         self._position: Point = _HOME
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
 
     def connect(self) -> None:
+        self._connected = True
         log.info("dry run: no AxiDraw connected, simulating %.0f mm/s", self._speed)
 
     def draw_stroke(self, stroke: Polyline) -> None:
@@ -143,5 +156,8 @@ class DryRunPlotter:
         self._position = clamped[-1]
 
     def finish(self) -> None:
+        if not self._connected:
+            return
+        self._connected = False
         self._position = _HOME
         log.info("dry run: finished")

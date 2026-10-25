@@ -26,6 +26,8 @@ PAGE = """<!doctype html>
   button:disabled { opacity: .35; cursor: default; }
   #pause { background: var(--accent); } #resume { background: var(--ok); } #newpaper { background: var(--warn); color: #fff; }
   #offline { display: none; color: var(--warn); }
+  #problem { display: none; color: var(--warn); font-weight: 700; }
+  #problem small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
   @media (max-width: 600px) { main { grid-template-columns: 1fr; } .side { grid-template-rows: none; grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
@@ -41,6 +43,7 @@ PAGE = """<!doctype html>
   <div id="status">
     <div id="phase">起動中</div>
     <div id="detail">-</div>
+    <div id="problem"><span id="problem-text"></span><small id="problem-detail"></small></div>
     <div id="offline">本体と通信できません</div>
   </div>
   <div class="buttons">
@@ -50,12 +53,29 @@ PAGE = """<!doctype html>
   </div>
 </footer>
 <script>
-const PHASES = { starting: "起動中", waiting_camera: "カメラ待ち", drawing: "描画中", idle: "待機中（新しい変化なし）", paused: "一時停止中", ready: "開始待ち（紙とペンをセットして「開始」）" };
+const PHASES = { starting: "起動中", waiting_camera: "カメラ待ち", waiting_plotter: "AxiDraw 接続待ち", drawing: "描画中", idle: "待機中（新しい変化なし）", paused: "一時停止中", ready: "開始待ち（紙とペンをセットして「開始」）" };
+const PROBLEMS = {
+  camera: "カメラが見つかりません。USB 接続を確認してください（自動で再試行中）",
+  plotter: "AxiDraw に接続できません。電源と USB を確認してください（自動で再試行中）",
+  plotter_stopped: "AxiDraw が停止しました。キャリッジを手で左上の角に戻してから「開始」を押してください",
+  cycles: "映像の処理に失敗しています。カメラの映像を確認してください",
+};
 let lastUpdated = -1;
+let streamHealthy = false;
+function restartCameraStream() { document.getElementById("camera").src = "/camera.mjpg?" + Date.now(); }
 async function refresh() {
   try {
     const s = await (await fetch("/status.json", { cache: "no-store" })).json();
     document.getElementById("offline").style.display = "none";
+    const problem = document.getElementById("problem");
+    problem.style.display = s.problem ? "block" : "none";
+    if (s.problem) {
+      document.getElementById("problem-text").textContent = PROBLEMS[s.problem.kind] || s.problem.kind;
+      document.getElementById("problem-detail").textContent = s.problem.detail || "";
+    }
+    const healthy = !(s.problem && s.problem.kind === "camera");
+    if (healthy && !streamHealthy) restartCameraStream();  // the MJPEG stream dies with the camera or the process
+    streamHealthy = healthy;
     const phase = document.getElementById("phase");
     phase.textContent = PHASES[s.phase] || s.phase;
     phase.className = s.phase;
@@ -65,7 +85,7 @@ async function refresh() {
     document.getElementById("pause").disabled = s.paused;
     const resume = document.getElementById("resume");
     resume.disabled = !s.paused;
-    resume.textContent = s.phase === "ready" ? "開始" : "再開";
+    resume.textContent = (s.cycle === 0 && s.drawn_mm === 0) ? "開始" : "再開";
     if (s.updated !== lastUpdated) {
       lastUpdated = s.updated;
       document.getElementById("paper").src = "/paper.jpg?" + s.updated;
@@ -73,6 +93,7 @@ async function refresh() {
     }
   } catch (e) {
     document.getElementById("offline").style.display = "block";
+    streamHealthy = false;
   }
 }
 async function control(action) {

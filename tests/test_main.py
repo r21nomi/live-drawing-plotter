@@ -109,20 +109,6 @@ def test_parse_args_rejects_invalid_values():
             parse_args(argv)
 
 
-class StoppingPlotter(RecordingPlotter):
-    def draw_stroke(self, stroke):
-        from live_plotter.plotter import PlotterStopped
-
-        raise PlotterStopped("Stopped by pause button press")
-
-
-class FailingConnectPlotter(RecordingPlotter):
-    def connect(self):
-        from live_plotter.plotter import PlotterError
-
-        raise PlotterError("could not connect")
-
-
 def _scene_file(tmp_path):
     path = tmp_path / "scene.png"
     cv2.imwrite(str(path), _frame_with_rectangle())
@@ -138,30 +124,6 @@ def _cfg(tmp_path, **drawing):
                      drawing=DrawingConfig(length_budget_mm=10_000.0, idle_sleep_s=0.0, **drawing))
 
 
-def test_run_exits_75_when_the_axidraw_stops_mid_run(tmp_path):
-    from live_plotter.main import EXIT_NEEDS_HOMING, run
-
-    plotter = StoppingPlotter()
-    assert run(_cfg(tmp_path), plotter=plotter) == EXIT_NEEDS_HOMING
-
-
-def test_run_exits_1_when_the_plotter_is_unavailable(tmp_path):
-    from live_plotter.main import EXIT_RETRY, run
-
-    assert run(_cfg(tmp_path), plotter=FailingConnectPlotter()) == EXIT_RETRY
-
-
-def test_run_exits_1_when_the_camera_is_unavailable():
-    from live_plotter.config import CameraConfig
-    from live_plotter.main import EXIT_RETRY, run
-
-    cfg = AppConfig(dry_run=True, preview=False, state_dir=None, web_port=None,
-                    camera=CameraConfig(source="/nonexistent/scene.png"))
-    plotter = RecordingPlotter()
-    assert run(cfg, plotter=plotter) == EXIT_RETRY
-    assert plotter.strokes == []  # the plotter was never energised
-
-
 def test_run_exits_0_on_saturation_stop(tmp_path):
     from live_plotter.main import EXIT_OK, run
 
@@ -169,18 +131,6 @@ def test_run_exits_0_on_saturation_stop(tmp_path):
     plotter = RecordingPlotter()
     assert run(cfg, plotter=plotter) == EXIT_OK
     assert plotter.strokes
-
-
-def test_run_loop_gives_up_after_repeated_cycle_failures(tmp_path, monkeypatch):
-    from live_plotter.main import EXIT_RETRY, run
-
-    monkeypatch.setattr("live_plotter.main._CYCLE_FAILURE_SLEEP_S", 0.0)
-
-    def broken(*_args, **_kwargs):
-        raise ValueError("bad frame")
-
-    monkeypatch.setattr("live_plotter.main.detect_edges", broken)
-    assert run(_cfg(tmp_path), plotter=RecordingPlotter()) == EXIT_RETRY
 
 
 def test_run_persists_ink_and_resumes_after_restart(tmp_path):
@@ -322,3 +272,126 @@ def _stop_via_signal():
 def test_parse_args_autostart():
     assert parse_args([]).autostart is False
     assert parse_args(["--autostart"]).autostart is True
+
+
+class FlakyPlotter(RecordingPlotter):
+    """Fails to connect a few times, then works; can also stop once mid-run."""
+
+    def __init__(self, connect_failures=0, stop_once=False):
+        super().__init__()
+        self.connect_calls = 0
+        self.connected = False
+        self._connect_failures = connect_failures
+        self._stop_once = stop_once
+
+    def connect(self):
+        from live_plotter.plotter import PlotterError
+
+        self.connect_calls += 1
+        if self.connect_calls <= self._connect_failures:
+            raise PlotterError("could not connect to AxiDraw (check USB cable and power)")
+        self.connected = True
+
+    def draw_stroke(self, stroke):
+        from live_plotter.plotter import PlotterStopped
+
+        if self._stop_once:
+            self._stop_once = False
+            raise PlotterStopped("Stopped by pause button press")
+        super().draw_stroke(stroke)
+
+    def finish(self):
+        self.connected = False
+
+
+def _fast_retries(monkeypatch):
+    monkeypatch.setattr("live_plotter.main._RETRY_S", 0.05)
+    monkeypatch.setattr("live_plotter.main._CYCLE_FAILURE_SLEEP_S", 0.0)
+
+
+def test_run_waits_for_the_camera_and_reports_the_problem(tmp_path, monkeypatch):
+    import shutil
+    import threading
+    from dataclasses import replace
+
+    from live_plotter.config import CameraConfig
+    from live_plotter.controls import Phase, ProblemKind, RunControl
+    from live_plotter.main import EXIT_OK, run
+
+    _fast_retries(monkeypatch)
+    missing = tmp_path / "later.png"
+    cfg = replace(_cfg(tmp_path), camera=CameraConfig(source=str(missing)))
+    control = RunControl()
+    plotter = RecordingPlotter()
+    observed = []
+
+    def observe_then_plug_in():
+        observed.append((control.phase, control.problem.kind if control.problem else None))
+        shutil.copy(_scene_file(tmp_path), missing)  # "plug the camera in"
+
+    threading.Timer(0.4, observe_then_plug_in).start()
+    threading.Timer(1.5, _stop_via_signal).start()
+    assert run(cfg, plotter=plotter, control=control) == EXIT_OK
+    assert observed == [(Phase.WAITING_CAMERA, ProblemKind.CAMERA)]
+    assert plotter.strokes  # drew once the camera appeared
+    assert control.problem is None
+
+
+def test_run_retries_plotter_connection(tmp_path, monkeypatch):
+    import threading
+
+    from live_plotter.controls import RunControl
+    from live_plotter.main import EXIT_OK, run
+
+    _fast_retries(monkeypatch)
+    plotter = FlakyPlotter(connect_failures=2)
+    control = RunControl()
+    threading.Timer(1.0, _stop_via_signal).start()
+    assert run(_cfg(tmp_path), plotter=plotter, control=control) == EXIT_OK
+    assert plotter.connect_calls == 3
+    assert plotter.strokes
+    assert control.problem is None
+
+
+def test_run_recovers_from_plotter_stop_after_operator_resumes(tmp_path, monkeypatch):
+    import threading
+
+    from live_plotter.controls import ProblemKind, RunControl
+    from live_plotter.main import EXIT_OK, run
+
+    _fast_retries(monkeypatch)
+    plotter = FlakyPlotter(stop_once=True)
+    control = RunControl()
+    observed = []
+
+    def observe_then_resume():
+        observed.append((control.paused, control.problem.kind if control.problem else None))
+        control.request_resume()  # operator re-homed the carriage and pressed start
+
+    threading.Timer(0.5, observe_then_resume).start()
+    threading.Timer(1.5, _stop_via_signal).start()
+    assert run(_cfg(tmp_path), plotter=plotter, control=control) == EXIT_OK
+    assert observed == [(True, ProblemKind.PLOTTER_STOPPED)]
+    assert plotter.connect_calls == 2  # reconnected after the stop
+    assert plotter.strokes  # drew after the operator resumed
+    assert control.problem is None
+
+
+def test_run_reports_repeated_cycle_failures_and_keeps_running(tmp_path, monkeypatch):
+    import threading
+
+    from live_plotter.controls import ProblemKind, RunControl
+    from live_plotter.main import EXIT_OK, run
+
+    _fast_retries(monkeypatch)
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("bad frame")
+
+    monkeypatch.setattr("live_plotter.main.detect_edges", broken)
+    control = RunControl()
+    observed = []
+    threading.Timer(0.6, lambda: observed.append(control.problem.kind if control.problem else None)).start()
+    threading.Timer(0.9, _stop_via_signal).start()
+    assert run(_cfg(tmp_path), plotter=RecordingPlotter(), control=control) == EXIT_OK
+    assert observed == [ProblemKind.CYCLES]

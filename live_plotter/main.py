@@ -13,7 +13,7 @@ import numpy as np
 
 from .camera import CameraError, FrameSource, open_source
 from .config import AppConfig, DrawingConfig, PaperConfig
-from .controls import Phase, RunControl
+from .controls import Phase, ProblemKind, RunControl
 from .dashboard import Dashboard
 from .geometry import Point, polyline_length
 from .ink_canvas import InkCanvas
@@ -33,9 +33,8 @@ PAPER_PRESETS: dict[str, tuple[float, float, int]] = {
 }
 
 EXIT_OK = 0
-EXIT_RETRY = 1  # camera / plotter not available: systemd restarts us
-EXIT_NEEDS_HOMING = 75  # AxiDraw stopped mid-run: position unknown, do NOT restart automatically
 
+_RETRY_S = 5.0  # between attempts to open the camera / connect the plotter
 _NO_FRAME_SLEEP_S = 0.2
 _PAUSE_POLL_S = 0.2
 _CYCLE_FAILURE_SLEEP_S = 1.0
@@ -62,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run(cfg: AppConfig, plotter: Plotter | None = None, control: RunControl | None = None) -> int:
-    """Run until stopped. Returns a process exit code (see EXIT_* constants)."""
+    """Run until stopped. The dashboard comes up first; hardware is (re)connected behind it."""
     stop = threading.Event()
     _install_signal_handlers(stop)
     if plotter is None:
@@ -76,30 +75,141 @@ def run(cfg: AppConfig, plotter: Plotter | None = None, control: RunControl | No
              cfg.paper.width_mm, cfg.paper.height_mm, cfg.drawing.length_budget_mm, cfg.drawing.saturation_policy)
     if control.paused:
         log.info("waiting for the start button on the dashboard (use --autostart to draw immediately)")
-    exit_code = EXIT_OK
+    if dashboard is not None:
+        dashboard.start()
     try:
-        # Camera first: if it is not ready yet we exit without ever energising the plotter.
-        with open_source(cfg.camera) as camera:
-            if dashboard is not None:
-                dashboard.start(camera)
-            plotter.connect()
-            try:
-                state = _run_loop(camera, plotter, preview, cfg, stop, state, store, control, dashboard)
-            finally:
-                plotter.finish()
-    except PlotterStopped as error:
-        log.error("%s", error)
-        log.error("the carriage position is unknown: move it to the home corner by hand before restarting")
-        exit_code = EXIT_NEEDS_HOMING
-    except (CameraError, PlotterError, CycleError) as error:
-        log.error("%s", error)
-        exit_code = EXIT_RETRY
+        state = _supervise(cfg, plotter, control, dashboard, preview, store, stop, state)
     finally:
+        plotter.finish()
         if dashboard is not None:
             dashboard.stop()
         preview.close()
-        log.info("stopped after %d cycles, %.1f m drawn (exit %d)", state.cycle, state.drawn_mm / 1000, exit_code)
-    return exit_code
+        log.info("stopped after %d cycles, %.1f m drawn", state.cycle, state.drawn_mm / 1000)
+    return EXIT_OK
+
+
+def _supervise(
+    cfg: AppConfig,
+    plotter: Plotter,
+    control: RunControl,
+    dashboard: Dashboard | None,
+    preview: Preview | NullPreview,
+    store: StateStore | None,
+    stop: threading.Event,
+    state: LoopState,
+) -> LoopState:
+    """Keep the piece alive: reopen the camera and reconnect the plotter for as long as it takes."""
+    while not stop.is_set():
+        camera = _open_camera_with_retry(cfg, control, stop)
+        if camera is None:
+            break
+        if dashboard is not None:
+            dashboard.set_camera(camera)
+        try:
+            state = _run_with_plotter(camera, cfg, plotter, control, dashboard, preview, store, stop, state)
+        except CameraError as error:
+            log.warning("camera lost: %s", error)
+            control.set_problem(ProblemKind.CAMERA, str(error))
+        except CycleError as error:
+            log.error("%s", error)
+            control.set_problem(ProblemKind.CYCLES, str(error))
+        finally:
+            if dashboard is not None:
+                dashboard.set_camera(None)
+            camera.stop()
+        state = _reload_state(cfg, store, state)
+    return state
+
+
+def _open_camera_with_retry(cfg: AppConfig, control: RunControl, stop: threading.Event) -> FrameSource | None:
+    announced = False
+    while not stop.is_set():
+        source = open_source(cfg.camera)
+        try:
+            source.start()
+        except CameraError as error:
+            if not announced:
+                log.warning("%s; retrying every %.0f s", error, _RETRY_S)
+                announced = True
+            control.set_phase(Phase.WAITING_CAMERA)
+            control.set_problem(ProblemKind.CAMERA, str(error))
+            stop.wait(_RETRY_S)
+            continue
+        if control.problem is not None and control.problem.kind in (ProblemKind.CAMERA, ProblemKind.CYCLES):
+            control.clear_problem()
+        return source
+    return None
+
+
+def _run_with_plotter(
+    camera: FrameSource,
+    cfg: AppConfig,
+    plotter: Plotter,
+    control: RunControl,
+    dashboard: Dashboard | None,
+    preview: Preview | NullPreview,
+    store: StateStore | None,
+    stop: threading.Event,
+    state: LoopState,
+) -> LoopState:
+    """Connect the plotter (retrying) and draw; after a stop or a lost connection, recover and go again."""
+    while not stop.is_set():
+        if not _connect_plotter_with_retry(plotter, control, stop):
+            break
+        try:
+            return _run_loop(camera, plotter, preview, cfg, stop, state, store, control, dashboard)
+        except PlotterStopped as error:
+            log.error("%s", error)
+            plotter.finish()
+            control.request_pause()
+            control.set_problem(ProblemKind.PLOTTER_STOPPED, str(error))
+            _wait_until_resumed(control, stop)
+            control.clear_problem()
+        except PlotterError as error:
+            log.error("plotter connection lost: %s", error)
+            plotter.finish()
+            control.set_problem(ProblemKind.PLOTTER, str(error))
+            stop.wait(_RETRY_S)
+        state = _reload_state(cfg, store, state)
+    return state
+
+
+def _connect_plotter_with_retry(plotter: Plotter, control: RunControl, stop: threading.Event) -> bool:
+    announced = False
+    while not stop.is_set():
+        if getattr(plotter, "connected", False):
+            return True
+        try:
+            plotter.connect()
+        except PlotterError as error:
+            if not announced:
+                log.warning("%s; retrying every %.0f s", error, _RETRY_S)
+                announced = True
+            control.set_phase(Phase.WAITING_PLOTTER)
+            control.set_problem(ProblemKind.PLOTTER, str(error))
+            stop.wait(_RETRY_S)
+            continue
+        if control.problem is not None and control.problem.kind == ProblemKind.PLOTTER:
+            control.clear_problem()
+        return True
+    return False
+
+
+def _wait_until_resumed(control: RunControl, stop: threading.Event) -> None:
+    """Operator must re-home the carriage by hand, then press start on the dashboard."""
+    control.set_phase(Phase.PAUSED)
+    while control.paused and not stop.is_set():
+        stop.wait(_PAUSE_POLL_S)
+
+
+def _reload_state(cfg: AppConfig, store: StateStore | None, state: LoopState) -> LoopState:
+    """After an interruption mid-cycle, trust the per-stroke saves rather than the stale in-memory state."""
+    if store is None:
+        return state
+    saved = store.load(cfg.paper, cfg.drawing.ink_px_per_mm)
+    if saved is None:
+        return state
+    return LoopState(saved.canvas, (0.0, 0.0), saved.cycle, saved.drawn_mm, state.saturated)
 
 
 def _initial_state(cfg: AppConfig, store: StateStore | None) -> LoopState:
