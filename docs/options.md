@@ -28,6 +28,7 @@
 | `--no-persist` | off | 記憶を保存しない |
 | `--web-port` | 8080 | ダッシュボードのポート |
 | `--no-web` | off | ダッシュボードを配信しない |
+| `--autostart` | off | ダッシュボードの「開始」を待たず、起動と同時に描き始める（Mac での開発用） |
 | `--dry-run` | off | AxiDraw なしで動かす（開発用） |
 
 ## 紙が埋まったとき（`--saturation-policy`）

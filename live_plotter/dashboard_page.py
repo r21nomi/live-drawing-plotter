@@ -20,7 +20,7 @@ PAGE = """<!doctype html>
   footer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
   #status { font-size: 15px; line-height: 1.5; }
   #phase { font-weight: 700; font-size: 20px; }
-  #phase.drawing { color: var(--ok); } #phase.paused { color: var(--accent); } #phase.idle { color: var(--muted); }
+  #phase.drawing { color: var(--ok); } #phase.paused, #phase.ready { color: var(--accent); } #phase.idle { color: var(--muted); }
   .buttons { display: flex; gap: 8px; }
   button { min-width: 120px; min-height: 60px; font-size: 20px; border: 0; border-radius: 10px; color: #111; background: var(--fg); cursor: pointer; }
   button:disabled { opacity: .35; cursor: default; }
@@ -50,7 +50,7 @@ PAGE = """<!doctype html>
   </div>
 </footer>
 <script>
-const PHASES = { starting: "起動中", waiting_camera: "カメラ待ち", drawing: "描画中", idle: "待機中（新しい変化なし）", paused: "一時停止中" };
+const PHASES = { starting: "起動中", waiting_camera: "カメラ待ち", drawing: "描画中", idle: "待機中（新しい変化なし）", paused: "一時停止中", ready: "開始待ち（紙とペンをセットして「開始」）" };
 let lastUpdated = -1;
 async function refresh() {
   try {
@@ -63,7 +63,9 @@ async function refresh() {
       `サイクル ${s.cycle} / 候補 ${s.candidates} 本 / 被覆率 ${(s.coverage * 100).toFixed(1)}% / 累計 ${(s.drawn_mm / 1000).toFixed(2)} m` +
       (s.dry_run ? " / ドライラン" : "") + (s.saturated ? " / 紙がほぼ埋まっています" : "");
     document.getElementById("pause").disabled = s.paused;
-    document.getElementById("resume").disabled = !s.paused;
+    const resume = document.getElementById("resume");
+    resume.disabled = !s.paused;
+    resume.textContent = s.phase === "ready" ? "開始" : "再開";
     if (s.updated !== lastUpdated) {
       lastUpdated = s.updated;
       document.getElementById("paper").src = "/paper.jpg?" + s.updated;
@@ -79,7 +81,7 @@ async function control(action) {
   } finally { refresh(); }
 }
 function newPaper() {
-  if (confirm("描画済みの記憶を消して、新しい紙として始めます。\\n紙をセットしてから「再開」を押してください。よろしいですか？")) control("new_paper");
+  if (confirm("描画済みの記憶を消して、新しい紙として始めます。\\n紙をセットしてから「開始」を押してください。よろしいですか？")) control("new_paper");
 }
 refresh();
 setInterval(refresh, 1000);

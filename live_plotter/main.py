@@ -67,13 +67,15 @@ def run(cfg: AppConfig, plotter: Plotter | None = None, control: RunControl | No
     _install_signal_handlers(stop)
     if plotter is None:
         plotter = DryRunPlotter(cfg.axidraw, cfg.paper) if cfg.dry_run else AxiDrawPlotter(cfg.axidraw, cfg.paper)
-    control = control or RunControl()
+    control = control or RunControl(paused=not cfg.autostart)
     dashboard = Dashboard(control, port=cfg.web_port) if cfg.web_port else None
     preview = open_preview(display_available(cfg.preview))
     store = StateStore(cfg.state_dir) if cfg.state_dir else None
     state = _initial_state(cfg, store)
     log.info("paper %.0fx%.0f mm, budget %.0f mm/cycle, saturation policy=%s",
              cfg.paper.width_mm, cfg.paper.height_mm, cfg.drawing.length_budget_mm, cfg.drawing.saturation_policy)
+    if control.paused:
+        log.info("waiting for the start button on the dashboard (use --autostart to draw immediately)")
     exit_code = EXIT_OK
     try:
         # Camera first: if it is not ready yet we exit without ever energising the plotter.
@@ -144,7 +146,8 @@ def _run_loop(
         if control.take_new_paper_request():
             state = _new_paper(cfg, state, store, dashboard)
         if control.paused:
-            control.set_phase(Phase.PAUSED)
+            untouched = state.cycle == 0 and state.drawn_mm == 0.0
+            control.set_phase(Phase.READY if untouched else Phase.PAUSED)
             stop.wait(_PAUSE_POLL_S)
             continue
         frame = camera.read()
@@ -292,6 +295,8 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     parser.add_argument("--web-port", type=int, default=defaults.web_port,
                         help="port of the dashboard (camera view and pause/resume controls)")
     parser.add_argument("--no-web", action="store_true", help="do not serve the dashboard")
+    parser.add_argument("--autostart", action="store_true",
+                        help="start drawing immediately instead of waiting for the dashboard's start button")
     preview = parser.add_mutually_exclusive_group()
     preview.add_argument("--preview", dest="preview", action="store_true", default=None)
     preview.add_argument("--no-preview", dest="preview", action="store_false")
@@ -357,6 +362,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         state_dir=None if args.no_persist else args.state_dir,
         fresh_start=args.fresh,
         web_port=None if args.no_web else args.web_port,
+        autostart=args.autostart,
     )
 
 
