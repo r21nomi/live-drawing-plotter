@@ -26,6 +26,8 @@
 | `--state-dir DIR` | state | 描画済みの記憶を保存する場所 |
 | `--fresh` | off | 保存された記憶を捨てて白紙から始める（紙を替えたとき） |
 | `--no-persist` | off | 記憶を保存しない |
+| `--web-port` | 8080 | ダッシュボードのポート |
+| `--no-web` | off | ダッシュボードを配信しない |
 | `--dry-run` | off | AxiDraw なしで動かす（開発用） |
 
 ## 紙が埋まったとき（`--saturation-policy`）

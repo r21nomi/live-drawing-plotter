@@ -19,11 +19,16 @@ live_plotter/
   plotter.py       AxiDrawPlotter（pyaxidraw 対話 API）と DryRunPlotter（ハードウェアなし）
   persistence.py   インクキャンバスの保存と復元
   preview.py       プレビュー窓（カメラ | エッジ | 紙）。ヘッドレスでは自動で無効
+  controls.py      一時停止・再開・新しい紙の指示（ロック付きの共有状態）
+  status.py        いまの状態（サイクル、候補数、被覆率など）
+  dashboard.py     ダッシュボードの HTTP サーバー（ページ、MJPEG、状態、操作）
+  dashboard_page.py ダッシュボードの HTML
   main.py          メインループと CLI
 deploy/
-  install-pi.sh        Pi の初回セットアップ
-  new-paper.sh         紙の交換（停止 → 記憶消去 → 再開）
-  live-plotter.service systemd ユニット
+  install-pi.sh                Pi の初回セットアップ
+  new-paper.sh                 紙の交換（停止 → 記憶消去 → 再開）
+  live-plotter.service         systemd ユニット
+  kiosk.sh / *.desktop         ダッシュボードを Chromium のキオスクモードで表示
 ```
 
 ## Mac での開発
@@ -47,6 +52,10 @@ uv run live-plotter --dry-run --source path/to/scene.png
 ```
 
 Mac から実機の AxiDraw を動かすこともできます。`--dry-run` を外すだけです。
+
+ダッシュボードは Mac でも `http://localhost:8080/` で開けます。標準ライブラリの `http.server` を別スレッドで動かし、
+`/`（ページ）、`/camera.mjpg`（MJPEG）、`/paper.jpg`、`/edges.jpg`、`/status.json`、`POST /control`（`{"action": "pause"|"resume"|"new_paper"}`）を提供します。
+メインループは 1 本描くごとに一時停止の指示を確認し、`dashboard.update()` で紙の状態と状況を送ります。
 
 ## テスト
 

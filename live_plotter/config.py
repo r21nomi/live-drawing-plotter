@@ -77,3 +77,4 @@ class AppConfig:
     preview: bool | None = None  # None = auto-detect a display
     state_dir: str | None = "state"  # where the ink memory is saved; None = don't persist
     fresh_start: bool = False  # discard saved ink memory at start (new sheet of paper)
+    web_port: int | None = 8080  # dashboard port; None = no dashboard

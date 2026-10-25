@@ -8,6 +8,21 @@ README の「日々の運用」で足りない場合に読むページです。
 Pi の電源が入るとこのサービスが自動で起動し、カメラを開き、AxiDraw に接続して描き始めます。
 `uv run live-plotter` を手で実行するのは、オプションを試すときだけです。その場合は先にサービスを止めてください（カメラと AxiDraw を 2 つのプロセスで取り合うため）。
 
+## ダッシュボード
+
+本体プロセスが `http://localhost:8080/` でダッシュボードを配信し、Pi のデスクトップ起動時に Chromium がキオスクモード（全画面）でそれを表示します。
+同じ Wi-Fi 内の他の端末からは `http://raspberrypi.local:8080/`（ホスト名は環境に合わせて）で開けます。認証はありません。会場の共有ネットワークで困る場合は `--no-web` で止めてください。
+
+| 操作 | 意味 |
+|---|---|
+| 一時停止 | 描画中の 1 本を描き終えたらペンを上げて待機。本体プロセスは動き続け、カメラ映像も流れ続ける |
+| 再開 | 続きから描く。一時停止中に風景が変わっていれば、新しい風景を描く |
+| 新しい紙 | 描画済みの記憶を消して一時停止。紙をセットして「再開」を押すと白紙として開始 |
+
+キオスク表示は `deploy/kiosk.sh` が行い、`~/.config/autostart/live-plotter-kiosk.desktop` からデスクトップログイン時に起動します。
+手で起動したいときは `bash deploy/kiosk.sh`、閉じたいときは Alt+F4 です。
+Chromium が自動起動しない環境（labwc / wayfire の設定による）では、`~/.config/labwc/autostart` または `~/.config/wayfire.ini` の `[autostart]` に `/home/ユーザー名/live-drawing-plotter/deploy/kiosk.sh` を追加してください。
+
 ## コマンド一覧
 
 以下の `$USER` には自分のユーザー名が自動で入ります。
@@ -20,12 +35,13 @@ Pi の電源が入るとこのサービスが自動で起動し、カメラを�
 | 止める（1 本描き終えてからペンを上げ、ホームへ） | `sudo systemctl stop live-plotter@$USER.service` |
 | 再開する（記憶を読み込み、同じ紙の続きから） | `sudo systemctl start live-plotter@$USER.service` |
 | 止めてすぐ起動し直す | `sudo systemctl restart live-plotter@$USER.service` |
-| 紙を替える（停止 → 記憶を消す → 再開） | `bash deploy/new-paper.sh` |
+| 紙を替える（ダッシュボードが使えないとき。停止 → 記憶を消す → 再開） | `bash deploy/new-paper.sh` |
 | 電源投入時の自動起動をやめる（搬出入のとき） | `sudo systemctl disable live-plotter@$USER.service` |
 | 自動起動を戻す | `sudo systemctl enable live-plotter@$USER.service` |
 
 ## 止め方の違い
 
+- ダッシュボードの「一時停止」: 1 本描き終えたらペンを上げて待機します。本体は動いたままなので、「再開」で即座に続けられます。
 - `systemctl stop`、Ctrl+C、プレビュー窓の `q`: 描画中の 1 本を描き終えてからペンを上げ、ホームに戻って切断します。次回はそのまま続きから描けます。
 - AxiDraw 本体の一時停止ボタン: その場で即停止します（緊急停止）。**キャリッジの位置が失われる** ので、次に起動する前に手でキャリッジを左上の角へ戻してください。この場合は自動再起動しません。
 
