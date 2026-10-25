@@ -26,7 +26,7 @@ live_plotter/
   main.py          メインループと CLI
 deploy/
   install-pi.sh                Pi の初回セットアップ
-  new-paper.sh                 紙の交換（停止 → 記憶消去 → 再開）
+  new-paper.sh                 紙の交換（停止 → 記憶消去 → 再起動）。ダッシュボードが使えないとき用
   live-plotter.service         systemd ユニット
   kiosk.sh / *.desktop         ダッシュボードを Chromium のキオスクモードで表示
 ```

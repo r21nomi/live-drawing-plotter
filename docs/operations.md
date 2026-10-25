@@ -39,7 +39,7 @@ Chromium が自動起動しない環境（labwc / wayfire の設定による）�
 | 止める（1 本描き終えてからペンを上げ、ホームへ） | `sudo systemctl stop live-plotter@$USER.service` |
 | 再開する（記憶を読み込み、同じ紙の続きから） | `sudo systemctl start live-plotter@$USER.service` |
 | 止めてすぐ起動し直す | `sudo systemctl restart live-plotter@$USER.service` |
-| 紙を替える（ダッシュボードが使えないとき。停止 → 記憶を消す → 再開） | `bash deploy/new-paper.sh` |
+| 紙を替える（ダッシュボードが使えないとき。停止 → 記憶を消す → 再起動。描画はダッシュボードの「開始」で） | `bash deploy/new-paper.sh` |
 | 電源投入時の自動起動をやめる（搬出入のとき） | `sudo systemctl disable live-plotter@$USER.service` |
 | 自動起動を戻す | `sudo systemctl enable live-plotter@$USER.service` |
 
@@ -69,7 +69,7 @@ systemd による再起動は、予期しない異常終了のときだけ起こ
 - `state/ink_canvas.png`: 紙の状態（白がインク）。画像として開いて確認できます。
 - `state/state.json`: 紙サイズ、累計線長、サイクル数。
 
-1 本描くごとに保存するので、電源断のあとも続きから描けます。紙を替えたときは `deploy/new-paper.sh` がこのディレクトリを消します。
+1 本描くごとに保存するので、電源断のあとも続きから描けます。紙を替えるときはダッシュボードの「新しい紙」を使います。ダッシュボードが使えないときは `deploy/new-paper.sh` がこのディレクトリを消します。
 紙サイズや余白の設定が保存時と違う場合は、保存内容を無視して白紙から始めます（ログに警告が出ます）。
 
 ## 起動オプションを変える

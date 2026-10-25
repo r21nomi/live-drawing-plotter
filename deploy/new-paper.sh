@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Change the sheet of paper: stop the piece, forget what was drawn, start again.
+# Change the sheet of paper without the dashboard: stop the piece, forget what was
+# drawn, start it again (it then waits for the start button on the dashboard).
 # Run on the Raspberry Pi:  bash deploy/new-paper.sh
 set -euo pipefail
 
@@ -13,4 +14,4 @@ rm -rf "$PROJECT_DIR/state"
 read -r -p "Put the new sheet in place with the pen at the top-left corner, then press Enter: " _
 echo "==> starting"
 sudo systemctl start "$SERVICE_NAME"
-echo "Drawing. Watch the log with: journalctl -u $SERVICE_NAME -f"
+echo "Restarted. Press 開始 on the dashboard to draw. Log: journalctl -u $SERVICE_NAME -f"
